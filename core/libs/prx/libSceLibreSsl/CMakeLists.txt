@@ -1,4 +1,4 @@
-add_library(libSceLibreSsl SHARED EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/Export.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/Digest.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/Aes.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/Error.cpp)
+add_library(libSceLibreSsl SHARED EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/Export.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/Digest.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/Runtime.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/Aes.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/Error.cpp ${CMAKE_CURRENT_SOURCE_DIR}/src/PkeyLifecycle.cpp)
 target_include_directories(libSceLibreSsl PRIVATE ${LIBS_INCLUDE_DIR})
 target_link_libraries(libSceLibreSsl PRIVATE mbedcrypto)
 configure_windows_unwind(libSceLibreSsl)
