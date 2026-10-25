@@ -19,6 +19,13 @@ struct EcGroup {
     mbedtls_ecp_group group;
 };
 
+struct EcBignum;
+
+struct EcBignumDeleter {
+    void operator()(EcBignum* number) const;
+};
+
 struct EcKey {
     std::unique_ptr<EcGroup> group;
+    std::unique_ptr<EcBignum, EcBignumDeleter> privateKey;
 };
