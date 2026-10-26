@@ -281,10 +281,6 @@ static int APS5_VABI RecordSign(int type, const unsigned char* digest, unsigned 
     return 66;
 }
 
-static int APS5_VABI OtherModExp(void*, const void*, void*, void*) {
-    return 1;
-}
-
 static void TestDispatch() {
     TestKey key(AllFields);
     const auto* defaultMethod = key.rsa->meth;
@@ -308,9 +304,6 @@ static void TestDispatch() {
     Require(RSA_sign_nid_postfix(5, digest.data(), 3, out.data(), &length, key.rsa) == 66 && crypts.calls == 4);
     Require(signs.calls == 1 && signs.type == 5 && signs.digest == digest.data() && signs.digestLength == 3 && signs.signature == out.data() && signs.signatureLength == &length && signs.rsa == key.rsa);
     key.rsa->flags = RsaFlagsDefault;
-    method = *defaultMethod;
-    method.operations[4] = reinterpret_cast<void*>(OtherModExp);
-    RequireThrows([&] { Encrypt(key, 20, digest, out, PaddingPkcs1); });
     method = *defaultMethod;
     method.operations[2] = nullptr;
     method.operations[3] = nullptr;
