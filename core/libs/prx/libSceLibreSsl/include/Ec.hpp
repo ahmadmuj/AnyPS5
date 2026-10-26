@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include "mbedtls/bignum.h"
 #include "mbedtls/ecp.h"
 
 struct NamedCurve {
@@ -29,17 +28,6 @@ struct EcPoint {
 
     const NamedCurve curve;
     mbedtls_ecp_point point;
-};
-
-struct EcPrivateKey {
-    explicit EcPrivateKey(const NamedCurve& named);
-    ~EcPrivateKey();
-
-    EcPrivateKey(const EcPrivateKey&) = delete;
-    EcPrivateKey& operator=(const EcPrivateKey&) = delete;
-
-    const NamedCurve curve;
-    mbedtls_mpi value;
 };
 
 struct EcBignum;

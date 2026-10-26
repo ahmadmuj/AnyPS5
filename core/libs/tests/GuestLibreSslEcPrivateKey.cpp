@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <stdexcept>
 #include <vector>
@@ -291,6 +292,122 @@ static void CheckThrows() {
     EC_KEY_free_nid_postfix(key);
 }
 
+struct GeneratedSize {
+    int nid;
+    int words;
+};
+
+static constexpr GeneratedSize GeneratedSizes[] = {
+    {409, 3}, {415, 4}, {711, 3}, {712, 4}, {713, 4}, {714, 4}, {715, 6}, {716, 9}, {928, 4}, {932, 7}, {934, 8},
+};
+
+static constexpr unsigned char P256RfcPublicKey[] = {
+    0x04, 0x60, 0xfe, 0xd4, 0xba, 0x25, 0x5a, 0x9d, 0x31, 0xc9, 0x61, 0xeb, 0x74, 0xc6, 0x35, 0x6d,
+    0x68, 0xc0, 0x49, 0xb8, 0x92, 0x3b, 0x61, 0xfa, 0x6c, 0xe6, 0x69, 0x62, 0x2e, 0x60, 0xf2, 0x9f,
+    0xb6, 0x79, 0x03, 0xfe, 0x10, 0x08, 0xb8, 0xbc, 0x99, 0xa4, 0x1a, 0xe9, 0xe9, 0x56, 0x28, 0xbc,
+    0x64, 0xf2, 0xf1, 0xb2, 0x0c, 0x2d, 0x7e, 0x9f, 0x51, 0x77, 0xa3, 0xc2, 0x94, 0xd4, 0x46, 0x22,
+    0x99,
+};
+
+static void RequireGenerated(const EcKey* key, int words, const char* what) {
+    const TestBignum* stored = Stored(key);
+    Require(stored != nullptr && stored->d != nullptr && stored->dmax == words && stored->neg == 0 && stored->flags == Malloced, what);
+    Require(Live(stored, sizeof(TestBignum)), what);
+    Require(stored->top > 0 && stored->top <= words && stored->d[stored->top - 1] != 0, what);
+    for (int word = stored->top; word < words; ++word) Require(stored->d[word] == 0, what);
+}
+
+static void CheckGeneratedSizes() {
+    for (const GeneratedSize& size : GeneratedSizes) {
+        EcKey* key = EC_KEY_new_by_curve_name_nid_postfix(size.nid);
+        allocations = 0;
+        freed.clear();
+        Require(EC_KEY_generate_key_nid_postfix(key) == 1, "EC_KEY_generate_key");
+        Require(allocations == 2 && freed.empty(), "a first EC_KEY_generate_key takes a BIGNUM and its words from the guest heap");
+        RequireGenerated(key, size.words, "the generated private key has the words of BN_rand_range");
+        Require(Live(Stored(key)->d, static_cast<std::size_t>(size.words) * sizeof(std::uint64_t)), "the generated words come from the guest heap");
+        const TestBignum* stored = Stored(key);
+        const std::uint64_t* words = stored->d;
+        Require(EC_KEY_generate_key_nid_postfix(key) == 1, "EC_KEY_generate_key again");
+        Require(Stored(key) == stored && stored->d == words && allocations == 2 && freed.empty(), "a second EC_KEY_generate_key reuses the BIGNUM and its words");
+        RequireGenerated(key, size.words, "the regenerated private key");
+        EC_KEY_free_nid_postfix(key);
+    }
+}
+
+static void CheckGenerateOverShortKey() {
+    std::uint64_t five[] = {5};
+    TestBignum source{five, 1, 1, 0, ConstTime};
+    EcKey* key = EC_KEY_new_by_curve_name_nid_postfix(415);
+    Require(EC_KEY_set_private_key_nid_postfix(key, &source) == 1, "EC_KEY_set_private_key of 5");
+    const TestBignum* stored = Stored(key);
+    const void* oldWords = stored->d;
+    allocations = 0;
+    freed.clear();
+    Require(EC_KEY_generate_key_nid_postfix(key) == 1, "EC_KEY_generate_key over a one-word key");
+    Require(Stored(key) == stored && stored->d != oldWords, "EC_KEY_generate_key keeps the BIGNUM and grows its words");
+    Require(allocations == 1 && freed.size() == 1 && FreedWiped(oldWords, sizeof(std::uint64_t)), "the one-word buffer is cleared and freed");
+    Require(Live(stored->d, 4 * sizeof(std::uint64_t)), "the grown words come from the guest heap");
+    RequireGenerated(key, 4, "the private key generated over a one-word key");
+    EC_KEY_free_nid_postfix(key);
+}
+
+static void CheckGenerateOverLongKey() {
+    std::uint64_t words[] = {1, 2, 3, 4, 0x99};
+    TestBignum source{words, 5, 5, 0, 0};
+    EcKey* key = EC_KEY_new_by_curve_name_nid_postfix(415);
+    Require(EC_KEY_set_private_key_nid_postfix(key, &source) == 1, "EC_KEY_set_private_key of five words");
+    const TestBignum* stored = Stored(key);
+    const std::uint64_t* oldWords = stored->d;
+    allocations = 0;
+    freed.clear();
+    Require(EC_KEY_generate_key_nid_postfix(key) == 1, "EC_KEY_generate_key over a five-word key");
+    Require(Stored(key) == stored && stored->d == oldWords && allocations == 0 && freed.empty(), "EC_KEY_generate_key keeps a buffer that is large enough");
+    Require(stored->dmax == 5 && stored->top > 0 && stored->top <= 4 && stored->neg == 0 && stored->flags == Malloced, "the five-word buffer keeps dmax 5");
+    for (int word = stored->top; word < 4; ++word) Require(stored->d[word] == 0, "the words above the value up to four words are zero");
+    Require(stored->d[4] == 0x99, "the word past the four written words is left as it was");
+    EC_KEY_free_nid_postfix(key);
+}
+
+static void CheckStoredKeyUse() {
+    std::uint64_t rfcWords[] = {0x7b8a622b120f6721, 0x4e50c3db36e89b12, 0x6b5c215767b1d693, 0xc9afa9d845ba7516};
+    TestBignum rfcKey{rfcWords, 4, 4, 0, 0};
+    EcKey* known = EC_KEY_new_by_curve_name_nid_postfix(415);
+    EcPoint* rfcPoint = EC_POINT_new_nid_postfix(EC_KEY_get0_group_nid_postfix(known));
+    Require(EC_POINT_oct2point_nid_postfix(EC_KEY_get0_group_nid_postfix(known), rfcPoint, P256RfcPublicKey, sizeof(P256RfcPublicKey), nullptr) == 1, "the RFC 6979 public key");
+    Require(EC_KEY_set_private_key_nid_postfix(known, &rfcKey) == 1 && EC_KEY_set_public_key_nid_postfix(known, rfcPoint) == 1, "the RFC 6979 key pair");
+    Require(EC_KEY_check_key_nid_postfix(known) == 1, "EC_KEY_check_key reads the stored words least significant first");
+    EC_POINT_free_nid_postfix(rfcPoint);
+    EC_KEY_free_nid_postfix(known);
+
+    EcKey* first = EC_KEY_new_by_curve_name_nid_postfix(415);
+    EcKey* second = EC_KEY_new_by_curve_name_nid_postfix(415);
+    EcKey* copy = EC_KEY_new_by_curve_name_nid_postfix(415);
+    Require(EC_KEY_generate_key_nid_postfix(first) == 1 && EC_KEY_generate_key_nid_postfix(second) == 1, "two generated P-256 keys");
+    Require(EC_KEY_set_private_key_nid_postfix(copy, Stored(first)) == 1, "EC_KEY_set_private_key from a generated key");
+    Require(EC_KEY_set_public_key_nid_postfix(copy, EC_KEY_get0_public_key_nid_postfix(first)) == 1, "EC_KEY_set_public_key from a generated key");
+    Require(EC_KEY_check_key_nid_postfix(copy) == 1, "the generated private key matches its public key");
+
+    const unsigned char digest[32] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe};
+    unsigned char signature[72] = {};
+    unsigned int length = 0;
+    Require(ECDSA_sign_nid_postfix(0, digest, sizeof(digest), signature, &length, copy) == 1, "ECDSA_sign with a copied private key");
+    Require(ECDSA_verify_nid_postfix(0, digest, sizeof(digest), signature, static_cast<int>(length), first) == 1, "the signature verifies with the generated key");
+
+    const EcPoint* peer = EC_KEY_get0_public_key_nid_postfix(second);
+    unsigned char fromCopy[32] = {};
+    unsigned char fromFirst[32] = {};
+    Require(ECDH_compute_key_nid_postfix(fromCopy, sizeof(fromCopy), peer, copy, nullptr) == 32, "ECDH_compute_key with a copied private key");
+    Require(ECDH_compute_key_nid_postfix(fromFirst, sizeof(fromFirst), peer, first, nullptr) == 32, "ECDH_compute_key with the generated key");
+    Require(std::memcmp(fromCopy, fromFirst, sizeof(fromCopy)) == 0, "both keys give the same secret");
+
+    Require(EC_KEY_set_private_key_nid_postfix(copy, Stored(second)) == 1, "EC_KEY_set_private_key from another generated key");
+    Require(EC_KEY_check_key_nid_postfix(copy) == 0, "EC_KEY_check_key with a private key of another pair");
+    EC_KEY_free_nid_postfix(copy);
+    EC_KEY_free_nid_postfix(second);
+    EC_KEY_free_nid_postfix(first);
+}
+
 int main() {
     InitializeHeap();
     CheckNewKeys();
@@ -303,5 +420,9 @@ int main() {
     CheckGroupChange();
     CheckGuestHeap();
     CheckThrows();
+    CheckGeneratedSizes();
+    CheckGenerateOverShortKey();
+    CheckGenerateOverLongKey();
+    CheckStoredKeyUse();
     return 0;
 }
