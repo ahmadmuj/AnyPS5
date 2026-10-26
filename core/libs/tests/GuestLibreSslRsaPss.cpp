@@ -25,6 +25,15 @@ using Bytes = std::vector<unsigned char>;
 constexpr int BignumStaticData = 0x02;
 constexpr unsigned char Fill = 0xEE;
 constexpr std::size_t Slack = 8;
+constexpr std::uint64_t RsaError = 0x4fffull << 12;
+constexpr std::uint64_t MallocFailure = RsaError | 65;
+constexpr std::uint64_t BadSignature = RsaError | 104;
+constexpr std::uint64_t DataTooLarge = RsaError | 109;
+constexpr std::uint64_t DataTooLargeForKeySize = RsaError | 110;
+constexpr std::uint64_t FirstOctetInvalid = RsaError | 133;
+constexpr std::uint64_t LastOctetInvalid = RsaError | 134;
+constexpr std::uint64_t SlenRecoveryFailed = RsaError | 135;
+constexpr std::uint64_t SlenCheckFailed = RsaError | 136;
 
 enum Digest { DigestMd5, DigestSha256, DigestSha384, DigestSha512, DigestNone };
 enum AddKind { AddExact, AddRefused, AddSalted, AddThrows };
@@ -479,6 +488,30 @@ template<typename TAction> static void RequireThrows(TAction action, std::source
     Require(false, location);
 }
 
+static bool QueueHolds(std::uint64_t error) {
+    const std::uint64_t first = ERR_get_error_nid_postfix();
+    const std::uint64_t second = ERR_get_error_nid_postfix();
+    return first == error && !second;
+}
+
+static bool QueueHoldsOneRsaError() {
+    const std::uint64_t first = ERR_get_error_nid_postfix();
+    const std::uint64_t second = ERR_get_error_nid_postfix();
+    return (first & ~std::uint64_t(0xfff)) == RsaError && (first & 0xfff) && !second;
+}
+
+static bool QueueHoldsNoRsaError() {
+    bool clean = true;
+    for (std::uint64_t error = ERR_get_error_nid_postfix(); error; error = ERR_get_error_nid_postfix()) clean = clean && (error >> 24) != (RsaError >> 24);
+    return clean;
+}
+
+template<typename TCall> static void RequireQueue(TCall call, int expected, std::uint64_t error, std::source_location location = std::source_location::current()) {
+    ERR_clear_error_nid_postfix();
+    const int result = call();
+    Require(result == expected && QueueHolds(error), location);
+}
+
 static void InitializeHeap() {
     void* const api[10] {};
     ApplicationHeapRegister_nid_no_patch(api);
@@ -569,11 +602,14 @@ static void TestAddVectors() {
         case AddExact:
         case AddRefused: {
             const auto expected = Hex(vector.bytes);
+            ERR_clear_error_nid_postfix();
             Require(Add(key, out, mHash, digest, vector.saltLength) == (vector.kind == AddExact) && std::equal(expected.begin(), expected.end(), out.begin()) && Untouched(out, expected.size()));
+            Require(!digest ? QueueHoldsNoRsaError() : vector.kind == AddExact ? QueueHolds(0) : QueueHoldsOneRsaError());
             break;
         }
         case AddSalted: {
-            Require(Add(key, out, mHash, digest, vector.saltLength) == 1 && Framed(out, key.Size(), combo.bits));
+            ERR_clear_error_nid_postfix();
+            Require(Add(key, out, mHash, digest, vector.saltLength) == 1 && Framed(out, key.Size(), combo.bits) && QueueHolds(0));
             const auto em = Encoded(out, key.Size());
             Require(Verify(key, mHash, digest, em, vector.saltLength) == 1 && Verify(key, mHash, digest, em, -2) == 1);
             break;
@@ -601,7 +637,11 @@ static void TestVerifyVectors() {
         Require(em.size() == key.Size());
         if (vector.position >= 0) em[static_cast<std::size_t>(vector.position)] ^= vector.flip;
         if (vector.expected < 0) RequireThrows([&] { Verify(key, mHash, DigestFor(combo.digest), em, vector.saltLength); });
-        else Require(Verify(key, mHash, DigestFor(combo.digest), em, vector.saltLength) == vector.expected);
+        else {
+            ERR_clear_error_nid_postfix();
+            Require(Verify(key, mHash, DigestFor(combo.digest), em, vector.saltLength) == vector.expected);
+            Require(vector.expected ? QueueHolds(0) : QueueHoldsOneRsaError());
+        }
     }
 }
 
@@ -679,8 +719,9 @@ static void TestNonNormalisedModulus() {
 static void TestOrdering() {
     const auto mHash = Pattern(64, 3);
     const auto* digest = EVP_sha256_nid_postfix();
-    Require(RSA_padding_add_PKCS1_PSS_nid_postfix(nullptr, nullptr, nullptr, nullptr, -1) == 0);
-    Require(RSA_verify_PKCS1_PSS_nid_postfix(nullptr, nullptr, nullptr, nullptr, -1) == 0);
+    ERR_clear_error_nid_postfix();
+    Require(RSA_padding_add_PKCS1_PSS_nid_postfix(nullptr, nullptr, nullptr, nullptr, -1) == 0 && QueueHoldsNoRsaError());
+    Require(RSA_verify_PKCS1_PSS_nid_postfix(nullptr, nullptr, nullptr, nullptr, -1) == 0 && QueueHoldsNoRsaError());
     for (int saltLength : {-3, INT_MIN}) {
         Require(RSA_padding_add_PKCS1_PSS_nid_postfix(nullptr, nullptr, mHash.data(), digest, saltLength) == 0);
         Require(RSA_verify_PKCS1_PSS_nid_postfix(nullptr, mHash.data(), digest, nullptr, saltLength) == 0);
@@ -695,6 +736,60 @@ static void TestOrdering() {
     Bytes out(low.Size() + Slack, 0xAA);
     Require(RSA_padding_add_PKCS1_PSS_nid_postfix(low.rsa, out.data(), mHash.data(), digest, 31) == 0 && out[0] == 0 &&
         std::all_of(out.begin() + 1, out.end(), [](unsigned char value) { return value == 0xAA; }));
+}
+
+static Bytes Flipped(Bytes bytes, std::size_t position, unsigned char flip) {
+    bytes[position] ^= flip;
+    return bytes;
+}
+
+static void TestErrorQueue() {
+    const auto& combo = PssCombos[0];
+    TestKey key(combo.bits);
+    TestKey tiny(PssCombos[7].bits);
+    const auto* md5 = DigestFor(combo.digest);
+    const auto mHash = HashFor(combo);
+    auto otherHash = mHash;
+    otherHash[0] ^= 0x01;
+    const Bytes em = Hex(PssBases[0]);
+    Bytes zero(tiny.Size(), 0);
+    zero.back() = 0xbc;
+    Bytes out;
+    Require(key.Size() == 65 && tiny.Size() == 17);
+
+    RequireQueue([&] { return Verify(key, mHash, md5, em, 16); }, 1, 0);
+    RequireQueue([&] { return Verify(key, mHash, md5, em, -2); }, 1, 0);
+    RequireQueue([&] { return Verify(key, mHash, md5, em, -1); }, 1, 0);
+    RequireQueue([&] { return Verify(key, mHash, md5, em, -3); }, 0, SlenCheckFailed);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 0, 0x01), -3); }, 0, SlenCheckFailed);
+    RequireQueue([&] { return RSA_verify_PKCS1_PSS_nid_postfix(nullptr, mHash.data(), md5, nullptr, INT_MIN); }, 0, SlenCheckFailed);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 0, 0x01), 16); }, 0, FirstOctetInvalid);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 0, 0x80), 47); }, 0, FirstOctetInvalid);
+    RequireQueue([&] { return Verify(key, mHash, md5, em, 47); }, 0, DataTooLarge);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 64, 0x01), 47); }, 0, DataTooLarge);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 64, 0x01), 16); }, 0, LastOctetInvalid);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 64, 0x01), -2); }, 0, LastOctetInvalid);
+    RequireQueue([&] { return Verify(tiny, mHash, md5, zero, -2); }, 0, MallocFailure);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 31, 0x02), 16); }, 0, SlenRecoveryFailed);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 31, 0x02), -2); }, 0, SlenRecoveryFailed);
+    RequireQueue([&] { return Verify(key, mHash, md5, em, 17); }, 0, SlenCheckFailed);
+    RequireQueue([&] { return Verify(key, mHash, md5, em, 15); }, 0, SlenCheckFailed);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 30, 0x01), 16); }, 0, SlenCheckFailed);
+    RequireQueue([&] { return Verify(key, otherHash, md5, em, 16); }, 0, BadSignature);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 30, 0x01), -2); }, 0, BadSignature);
+    RequireQueue([&] { return Verify(key, mHash, md5, Flipped(em, 40, 0x10), -2); }, 0, BadSignature);
+
+    RequireQueue([&] { return Add(key, out, mHash, md5, 16); }, 1, 0);
+    RequireQueue([&] { return Add(key, out, mHash, md5, -2); }, 1, 0);
+    RequireQueue([&] { return Add(key, out, mHash, md5, 46); }, 1, 0);
+    RequireQueue([&] { return Add(key, out, mHash, md5, -3); }, 0, SlenCheckFailed);
+    RequireQueue([&] { return RSA_padding_add_PKCS1_PSS_nid_postfix(nullptr, nullptr, mHash.data(), md5, INT_MIN); }, 0, SlenCheckFailed);
+    RequireQueue([&] { return Add(key, out, mHash, md5, 47); }, 0, DataTooLargeForKeySize);
+    RequireQueue([&] { return Add(key, out, mHash, EVP_sha512_nid_postfix(), -1); }, 0, DataTooLargeForKeySize);
+
+    ERR_clear_error_nid_postfix();
+    Require(Verify(key, mHash, md5, em, -3) == 0 && Verify(key, otherHash, md5, em, 16) == 0 && Add(key, out, mHash, md5, 47) == 0);
+    Require(ERR_get_error_nid_postfix() == SlenCheckFailed && ERR_get_error_nid_postfix() == BadSignature && QueueHolds(DataTooLargeForKeySize));
 }
 
 static int APS5_VABI CustomInit(EvpMdContext*) { return 1; }
@@ -736,11 +831,13 @@ static void TestThrows() {
     failing.mdSize = 64;
     for (int bits : {136, 137}) {
         TestKey small(bits);
-        Require(Add(small, out, mHash, &failing, -2) == 0 && Untouched(out, bits & 1) && (!(bits & 1) || !out[0]));
+        ERR_clear_error_nid_postfix();
+        Require(Add(small, out, mHash, &failing, -2) == 0 && Untouched(out, bits & 1) && (!(bits & 1) || !out[0]) && QueueHolds(0));
     }
-    Require(RSA_padding_add_PKCS1_PSS_nid_postfix(key.rsa, nullptr, mHash.data(), &failing, 0) == 0);
+    RequireQueue([&] { return RSA_padding_add_PKCS1_PSS_nid_postfix(key.rsa, nullptr, mHash.data(), &failing, 0); }, 0, 0);
     custom.mdSize = 65;
-    Require(Add(key, out, mHash, &custom, 0) == 0 && Verify(key, mHash, &custom, em, -2) == 0);
+    ERR_clear_error_nid_postfix();
+    Require(Add(key, out, mHash, &custom, 0) == 0 && QueueHoldsNoRsaError() && Verify(key, mHash, &custom, em, -2) == 0 && QueueHoldsNoRsaError());
     custom.mdSize = INT_MAX;
     RequireThrows([&] { Add(key, out, mHash, &custom, -1); });
     TestKey one(1);
@@ -770,5 +867,6 @@ int main() {
     TestNonNormalisedModulus();
     TestOrdering();
     TestThrows();
+    TestErrorQueue();
     std::puts("libSceLibreSsl RSA PSS tests passed");
 }
