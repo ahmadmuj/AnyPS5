@@ -9,8 +9,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <initializer_list>
+#include <new>
 #include <source_location>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 constexpr std::size_t CtxSize = 120;
@@ -35,6 +37,31 @@ template<typename TAction> static void RequireThrows(TAction action, std::source
 
 static bool failAllocation = false;
 static int liveAllocations = 0;
+static int hostBudget = -1;
+static bool hostFailed = false;
+static int liveHostAllocations = 0;
+
+void* operator new(std::size_t size) {
+    if (hostBudget == 0) {
+        hostBudget = -1;
+        hostFailed = true;
+        throw std::bad_alloc();
+    }
+    if (hostBudget > 0) --hostBudget;
+    void* pointer = std::malloc(size == 0 ? 1 : size);
+    if (!pointer) throw std::bad_alloc();
+    ++liveHostAllocations;
+    return pointer;
+}
+
+void operator delete(void* pointer) noexcept {
+    if (pointer) --liveHostAllocations;
+    std::free(pointer);
+}
+
+void operator delete(void* pointer, std::size_t) noexcept {
+    ::operator delete(pointer);
+}
 
 static void* APS5_VABI Allocate_nid_no_patch(std::size_t size) {
     if (failAllocation) return nullptr;
@@ -114,8 +141,7 @@ struct Fixture {
         Require(std::memcmp(internal, expected, InternalSize) == 0, location);
     }
 
-    void RequireGroups(std::initializer_list<std::uint16_t> groups, std::source_location location = std::source_location::current()) {
-        const std::vector<std::uint16_t> wanted(groups);
+    void RequireGroups(const std::vector<std::uint16_t>& wanted, std::source_location location = std::source_location::current()) {
         Require(GroupList() != nullptr, location);
         Require(Load<std::uint64_t>(internal, GroupsLength) == wanted.size(), location);
         Require(std::memcmp(GroupList(), wanted.data(), wanted.size() * sizeof(std::uint16_t)) == 0, location);
@@ -194,6 +220,46 @@ static void TestGroups() {
     fixture.RequireGroups({23});
 }
 
+static void TestGroupsHostAllocationFailure() {
+    struct Case {
+        const char* list;
+        std::vector<std::uint16_t> groups;
+    };
+    const std::string unknown(128, 'a');
+    const Case cases[] = {
+        {"X25519", {29}},
+        {"sect163k1:sect163r1:sect163r2:sect193r1:sect193r2:sect233k1:sect233r1:sect239k1:sect283k1:sect283r1:sect409k1:sect409r1:sect571k1:sect571r1:secp160k1:secp160r1:secp160r2:secp192k1:prime192v1:secp224k1:secp224r1:secp256k1:prime256v1:secp384r1:secp521r1:brainpoolP256r1:brainpoolP384r1:brainpoolP512r1:X25519",
+         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29}},
+        {"X25519:X25519:P-256:P-256", {29, 29, 23, 23}},
+        {unknown.c_str(), {}},
+    };
+    for (const Case& test : cases) {
+        hostFailed = true;
+        for (int budget = 0; hostFailed; ++budget) {
+            Fixture fixture;
+            Require(SSL_CTX_set1_groups_list_nid_postfix(fixture.Context(), "prime256v1") == 1);
+            const std::uint16_t* kept = fixture.GroupList();
+            const int guest = liveAllocations;
+            const int host = liveHostAllocations;
+            hostFailed = false;
+            hostBudget = budget;
+            const int result = SSL_CTX_set1_groups_list_nid_postfix(fixture.Context(), test.list);
+            hostBudget = -1;
+            Require(liveHostAllocations == host);
+            if (hostFailed || test.groups.empty()) {
+                Require(result == 0);
+                Require(fixture.GroupList() == kept);
+                Require(liveAllocations == guest);
+                fixture.RequireGroups({23});
+            } else {
+                Require(result == 1);
+                Require(liveAllocations == guest);
+                fixture.RequireGroups(test.groups);
+            }
+        }
+    }
+}
+
 static void TestNullInternal() {
     Fixture fixture;
     Store<void*>(fixture.ctx, offsetof(LibreSslCtx, internal), nullptr);
@@ -205,6 +271,7 @@ int main() {
     InitializeHeap();
     TestAlpn();
     TestGroups();
+    TestGroupsHostAllocationFailure();
     TestNullInternal();
     Require(liveAllocations == 0);
     std::puts("LibreSSL SSL_CTX ALPN and group list checks passed");

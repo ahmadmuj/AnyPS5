@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -72,17 +73,21 @@ int APS5_VABI SSL_CTX_set1_groups_list_nid_postfix(LibreSslCtx* ctx, const char*
     std::vector<std::uint16_t> groups;
     const std::string_view names = list;
     std::size_t start = 0;
-    while (true) {
-        const std::size_t end = names.find(':', start);
-        const std::string name(names.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start));
-        int nid = OBJ_sn2nid_nid_postfix(name.c_str());
-        if (!nid) nid = NistCurveNid(name);
-        if (!nid) return 0;
-        const std::uint16_t group = CurveId(nid);
-        if (!group) return 0;
-        groups.push_back(group);
-        if (end == std::string_view::npos) break;
-        start = end + 1;
+    try {
+        while (true) {
+            const std::size_t end = names.find(':', start);
+            const std::string name(names.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start));
+            int nid = OBJ_sn2nid_nid_postfix(name.c_str());
+            if (!nid) nid = NistCurveNid(name);
+            if (!nid) return 0;
+            const std::uint16_t group = CurveId(nid);
+            if (!group) return 0;
+            groups.push_back(group);
+            if (end == std::string_view::npos) break;
+            start = end + 1;
+        }
+    } catch (const std::bad_alloc&) {
+        return 0;
     }
     auto* result = static_cast<std::uint16_t*>(malloc_nid_postfix(groups.size() * sizeof(std::uint16_t)));
     if (!result) return 0;
