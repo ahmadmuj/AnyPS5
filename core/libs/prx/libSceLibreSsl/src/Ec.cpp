@@ -169,7 +169,7 @@ int RandomRangeWords(const mbedtls_mpi& order) {
 void ReadPrivateKey(const EcGroup& group, const EcBignum& stored, mbedtls_mpi& out, const char* function) {
     const mbedtls_mpi& order = group.group.N;
     const std::size_t orderWords = (mbedtls_mpi_bitlen(&order) + 63) / 64;
-    const bool normalized = stored.top > 0 && !stored.neg && stored.d[stored.top - 1] != 0 && static_cast<std::size_t>(stored.top) <= orderWords;
+    const bool normalized = stored.top > 0 && !stored.neg && static_cast<std::size_t>(stored.top) <= orderWords && stored.d[stored.top - 1] != 0;
     if (normalized) Check(mbedtls_mpi_read_binary_le(&out, reinterpret_cast<const unsigned char*>(stored.d), static_cast<std::size_t>(stored.top) * sizeof(stored.d[0])), function);
     if (!normalized || mbedtls_mpi_cmp_mpi(&out, &order) >= 0) {
         NotImplemented_nid_no_patch((std::string(function) + ": a private key that is zero, negative, at least the group order or has zero high words").c_str());
@@ -468,6 +468,7 @@ int APS5_VABI EC_KEY_generate_key_nid_postfix(EcKey* key) {
     }
     const int words = RandomRangeWords(group.group.N);
     if (words > number->dmax) {
+        if (number->flags & BignumFlagStaticData) return 0;
         auto* expanded = static_cast<std::uint64_t*>(malloc_nid_postfix(static_cast<std::size_t>(words) * sizeof(std::uint64_t)));
         if (!expanded) return 0;
         if (number->d) {

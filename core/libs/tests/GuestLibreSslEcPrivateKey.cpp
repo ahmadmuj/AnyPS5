@@ -369,6 +369,22 @@ static void CheckGenerateOverLongKey() {
     EC_KEY_free_nid_postfix(key);
 }
 
+static void CheckGenerateOverStaticKey() {
+    std::uint64_t five[] = {5};
+    TestBignum source{five, 1, 1, 0, 0};
+    EcKey* key = EC_KEY_new_by_curve_name_nid_postfix(415);
+    Require(EC_KEY_set_private_key_nid_postfix(key, &source) == 1, "EC_KEY_set_private_key of 5");
+    auto* stored = const_cast<TestBignum*>(Stored(key));
+    const std::uint64_t* oldWords = stored->d;
+    stored->flags |= StaticData;
+    allocations = 0;
+    freed.clear();
+    Require(EC_KEY_generate_key_nid_postfix(key) == 0, "EC_KEY_generate_key cannot grow static words");
+    Require(Stored(key) == stored && stored->d == oldWords && stored->d[0] == 5 && stored->top == 1 && stored->dmax == 1 && allocations == 0 && freed.empty(), "a failed EC_KEY_generate_key leaves static words as they were");
+    stored->flags = Malloced;
+    EC_KEY_free_nid_postfix(key);
+}
+
 static void CheckStoredKeyUse() {
     std::uint64_t rfcWords[] = {0x7b8a622b120f6721, 0x4e50c3db36e89b12, 0x6b5c215767b1d693, 0xc9afa9d845ba7516};
     TestBignum rfcKey{rfcWords, 4, 4, 0, 0};
@@ -423,6 +439,7 @@ int main() {
     CheckGeneratedSizes();
     CheckGenerateOverShortKey();
     CheckGenerateOverLongKey();
+    CheckGenerateOverStaticKey();
     CheckStoredKeyUse();
     return 0;
 }
