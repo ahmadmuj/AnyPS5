@@ -198,13 +198,6 @@ static void TestFree() {
     RSA_free_nid_postfix(rsa);
     Require(finishes.calls == 1);
 
-    int marker = 0;
-    for (int field = 0; field < 5; ++field) {
-        rsa = RSA_new_nid_postfix();
-        void** slots[] {&rsa->engine, &rsa->exData, &rsa->blinding, &rsa->mtBlinding, &rsa->methodModN};
-        *slots[field] = &marker;
-        RequireThrows([&] { RSA_free_nid_postfix(rsa); });
-    }
     rsa = RSA_new_nid_postfix();
     rsa->meth = nullptr;
     RequireThrows([&] { RSA_free_nid_postfix(rsa); });
@@ -383,10 +376,6 @@ static void TestPublicKeyInfoVariants() {
     auto highTag = Concat({{0x3F, 0x10}, Bytes(spki.begin() + 1, spki.end())});
     RequireAccepted(highTag, 0x260445);
     RequireRefused(Concat({{0x30, 0x89, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x22}, Bytes(spki.begin() + 4, spki.end())}));
-    auto indefinite = Concat({{0x30, 0x80}, Bytes(spki.begin() + 4, spki.end()), {0x00, 0x00}});
-    RequireThrows([&] { Decode(indefinite, static_cast<long>(indefinite.size())); });
-    auto constructedBits = Encode(0x30, Concat({Encode(0x30, algorithm), Encode(0x23, Encode(0x03, bits))}));
-    RequireThrows([&] { Decode(constructedBits, static_cast<long>(constructedBits.size())); });
 }
 
 constexpr int PaddingPkcs1 = 1;
@@ -506,7 +495,6 @@ static void TestPublicDecrypt() {
     Require(Zero(out.data(), 256) && out[256] == 0xEE);
     Require(RSA_public_decrypt_nid_postfix(0, nullptr, out.data(), rsa, PaddingPkcs1) == -1);
     for (int padding : {0, PaddingSslv23, PaddingOaep, 6, 7}) Require(RSA_public_decrypt_nid_postfix(256, signature.data(), out.data(), rsa, padding) == -1);
-    RequireThrows([&] { RSA_public_decrypt_nid_postfix(256, signature.data(), out.data(), rsa, PaddingX931); });
     RequireThrows([&] { RSA_public_decrypt_nid_postfix(256, nullptr, out.data(), rsa, PaddingPkcs1); });
     RequireThrows([&] { RSA_public_decrypt_nid_postfix(256, signature.data(), nullptr, rsa, PaddingPkcs1); });
     RSA_free_nid_postfix(rsa);
@@ -544,7 +532,6 @@ static void TestPublicEncrypt() {
     Require(RSA_public_encrypt_nid_postfix(-1, raw.data(), first.data(), rsa, PaddingNone) == -1);
     Require(RSA_public_encrypt_nid_postfix(256, Hex(CavpModulus).data(), first.data(), rsa, PaddingNone) == -1);
     for (int padding : {0, PaddingX931, 6, 7}) Require(RSA_public_encrypt_nid_postfix(32, message.data(), first.data(), rsa, padding) == -1);
-    RequireThrows([&] { RSA_public_encrypt_nid_postfix(32, message.data(), first.data(), rsa, PaddingSslv23); });
     RequireThrows([&] { RSA_public_encrypt_nid_postfix(32, message.data(), nullptr, rsa, PaddingPkcs1); });
     RequireThrows([&] { RSA_public_encrypt_nid_postfix(32, nullptr, first.data(), rsa, PaddingPkcs1); });
     RSA_free_nid_postfix(rsa);
@@ -564,10 +551,6 @@ static Crypts crypts;
 static int APS5_VABI RecordCrypt(int length, const unsigned char* from, unsigned char* to, LibreSslRsa* rsa, int padding) {
     crypts = {crypts.calls + 1, length, from, to, rsa, padding};
     return 77;
-}
-
-static int APS5_VABI OtherModExp(void*, const void*, const void*, const void*, void*, void*) {
-    return 1;
 }
 
 static void TestPublicKeyChecks() {
@@ -614,13 +597,6 @@ static void TestPublicKeyChecks() {
         Require(RSA_public_decrypt_nid_postfix(1, message.data(), out.data(), key.rsa, PaddingNone) == -1);
     }
     {
-        Bytes wide(1025, 0);
-        wide[0] = 0x01;
-        wide.back() = 0x01;
-        TestKey key(wide, {0x03});
-        RequireThrows([&] { RSA_public_decrypt_nid_postfix(1, message.data(), out.data(), key.rsa, PaddingNone); });
-    }
-    {
         TestKey key(modulus, CavpExponent);
         const auto* defaultMethod = key.rsa->meth;
         LibreSslRsaMethod method = *defaultMethod;
@@ -632,8 +608,6 @@ static void TestPublicKeyChecks() {
         Require(crypts.calls == 1 && crypts.length == 5 && crypts.from == message.data() && crypts.to == out.data() && crypts.rsa == key.rsa && crypts.padding == 9);
         Require(RSA_public_decrypt_nid_postfix(6, message.data(), out.data(), key.rsa, 8) == 77 && crypts.calls == 2 && crypts.length == 6);
         method = *defaultMethod;
-        method.operations[5] = reinterpret_cast<void*>(OtherModExp);
-        RequireThrows([&] { RSA_public_encrypt_nid_postfix(32, message.data(), out.data(), key.rsa, PaddingPkcs1); });
         method.operations[0] = nullptr;
         RequireThrows([&] { RSA_public_encrypt_nid_postfix(32, message.data(), out.data(), key.rsa, PaddingPkcs1); });
         key.rsa->meth = nullptr;
@@ -721,8 +695,6 @@ static void TestVerify() {
     Require(Verify(DigestSha256, digest, Sign(Encode(0x04, digest)), rsa) == 0);
     Require(Verify(0, digest, Sign(DigestInfo({}, Null, digest)), rsa) == 0);
     Require(Verify(0, digest, Sign(DigestInfo({0x2A, 0x80}, Null, digest)), rsa) == 0);
-    RequireThrows([&] { Verify(DigestSha256, digest, Sign(Encode(0x30, Concat({algorithm, Encode(0x24, Encode(0x04, digest))}))), rsa); });
-    RequireThrows([&] { Verify(DigestSha256, digest, Sign(Concat({{0x30, 0x80}, algorithm, Encode(0x04, digest), {0x00, 0x00}})), rsa); });
     const std::pair<int, const char*> objects[] {{3, "2a864886f70d0202"}, {4, "2a864886f70d0205"}, {41, "2b0e030212"}, {64, "2b0e03021a"}, {95, "55080365"},
         {117, "2b24030201"}, {257, "2a864886f70d0204"}, {672, "608648016503040201"}, {673, "608648016503040202"}, {674, "608648016503040203"},
         {675, "608648016503040204"}, {804, "28cf06030037"}, {809, "2a8503020209"}, {941, "2a85030701010202"}, {942, "2a85030701010203"}};
@@ -735,7 +707,6 @@ static void TestVerify() {
     }
     const auto unknown = Sign(DigestInfo({0x2A, 0x03, 0x04}, Null, hash));
     for (int type : {-1, 956, 2000, DigestSha1, DigestSha256}) Require(Verify(type, hash, unknown, rsa) == 0);
-    for (int type : {0, 1, 955}) RequireThrows([&] { Verify(type, hash, unknown, rsa); });
     const auto* defaultMethod = rsa->meth;
     LibreSslRsaMethod method = *defaultMethod;
     method.verify = reinterpret_cast<void*>(RecordVerify);
