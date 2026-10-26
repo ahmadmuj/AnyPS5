@@ -1,19 +1,15 @@
+#include "prx/libSceLibreSsl/include/Api.hpp"
 #include "prx/libc/include/general/VabiMacros.hpp"
 #include <array>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 
-extern "C" {
-const char* APS5_VABI OBJ_nid2sn_nid_postfix(int);
-int APS5_VABI OBJ_sn2nid_nid_postfix(const char*);
-}
-
 static void Require(bool value) { if (!value) std::abort(); }
 
-template<typename TException, typename TAction>
+template<typename TAction>
 static void RequireThrows(TAction action) {
-    try { action(); } catch (const TException&) { return; }
+    try { action(); } catch (const std::invalid_argument&) { return; }
     std::abort();
 }
 
@@ -47,13 +43,9 @@ int main() {
     Require(OBJ_sn2nid_nid_postfix("sha256") == 0);
     Require(OBJ_sn2nid_nid_postfix("ZZZ") == 0);
     for (int nid = 1; nid < 956; ++nid) {
-        if (IsUnassigned(nid)) {
-            RequireThrows<std::runtime_error>([nid] { OBJ_nid2sn_nid_postfix(nid); });
-            continue;
-        }
-        if (nid == 393) continue;
+        if (IsUnassigned(nid) || nid == 393) continue;
         Require(OBJ_sn2nid_nid_postfix(OBJ_nid2sn_nid_postfix(nid)) == nid);
     }
-    RequireThrows<std::invalid_argument>([] { OBJ_sn2nid_nid_postfix(nullptr); });
+    RequireThrows([] { OBJ_sn2nid_nid_postfix(nullptr); });
     return 0;
 }

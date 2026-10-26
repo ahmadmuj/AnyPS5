@@ -1,3 +1,4 @@
+#include "prx/libSceLibreSsl/include/Api.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -1036,7 +1037,7 @@ extern "C" {
 
 const char* APS5_VABI OBJ_nid2sn_nid_postfix(int nid) {
     if (nid < 0 || static_cast<std::size_t>(nid) >= ShortNames.size()) return nullptr;
-    if (!ShortNames[nid]) throw std::runtime_error(std::string(__func__) + ": NID " + std::to_string(nid) + " is unassigned and LibreSSL reports it through the error queue, which is not implemented");
+    if (!ShortNames[nid]) throw std::runtime_error(std::string(__func__) + ": NID " + std::to_string(nid) + " is unassigned, and publishing OBJ_R_UNKNOWN_NID to the error queue is not implemented");
     return ShortNames[nid];
 }
 
