@@ -1,4 +1,5 @@
 #include "prx/libSceLibreSsl/include/Api.hpp"
+#include <atomic>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -398,7 +399,8 @@ EcKey* APS5_VABI EC_KEY_new_by_curve_name_nid_postfix(int nid) {
 }
 
 void APS5_VABI EC_KEY_free_nid_postfix(EcKey* key) {
-    delete key;
+    static_assert(std::atomic_ref<std::int32_t>::required_alignment <= alignof(std::int32_t));
+    if (key && std::atomic_ref<std::int32_t>(key->references).fetch_sub(1) == 1) delete key;
 }
 
 const EcGroup* APS5_VABI EC_KEY_get0_group_nid_postfix(const EcKey* key) {

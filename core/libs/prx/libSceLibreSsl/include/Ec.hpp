@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include "mbedtls/ecp.h"
 
@@ -40,4 +41,5 @@ struct EcKey {
     std::unique_ptr<EcGroup> group;
     std::unique_ptr<EcPoint> publicKey;
     std::unique_ptr<EcBignum, EcBignumDeleter> privateKey;
+    std::int32_t references = 1;
 };
