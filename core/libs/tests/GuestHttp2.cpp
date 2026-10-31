@@ -19,6 +19,8 @@ static bool Throws(TCall call) {
 int main() {
     Require(sceHttp2CreateCookieBox(0xffff) == static_cast<int>(0x817b121du));
     const int box = sceHttp2CreateCookieBox(0x10000);
+    Require(sceHttp2Init(1, 1, 0x10000, 0) == static_cast<int>(0x817B11FE));
+    Require(Throws([] { sceHttp2Init(1, 1, 0x10000, -1); }));
     const int context = sceHttp2Init(1, 1, 0x10000, 4);
     const int tmpl = sceHttp2CreateTemplate(context, "agent", 3, 0);
     const int proxyTemplate = sceHttp2CreateTemplate(context, "agent", 3, 1);
@@ -31,7 +33,8 @@ int main() {
     Require(Throws([&] { sceHttp2SetCookieBox(tmpl, box); }));
     Require(sceHttp2CookieFlush(box) == 0);
     Require(sceHttp2SetResolveRetry(tmpl, 0) == 0);
-    Require(Throws([&] { sceHttp2SetResolveRetry(tmpl, 3); }));
+    Require(sceHttp2SetResolveRetry(tmpl, 3) == 0);
+    Require(Throws([&] { sceHttp2SetResolveRetry(tmpl, -1); }));
     Require(sceHttp2SetRequestNoContentLength(request) == 0);
     Require(Throws([&] { sceHttp2AddRequestHeader(request, "bad:name", "value", 0); }));
     Require(Throws([&] { sceHttp2AddRequestHeader(request, "x-header", "value\r\ninjected: yes", 0); }));
