@@ -267,13 +267,57 @@ static void TestNullInternal() {
     RequireThrows([&] { SSL_CTX_set1_groups_list_nid_postfix(fixture.Context(), "X25519"); });
 }
 
+static bool TestAddedGroupNames() {
+    bool passed = true;
+    for (const auto& test : std::array<std::array<const char*, 2>, 3>{{
+        {"prime256v1", "unrelated long name"}, {"P-256", "unrelated long name"}, {nullptr, "P-256"}
+    }}) {
+        Fixture fixture;
+        Require(SSL_CTX_set1_groups_list_nid_postfix(fixture.Context(), "X25519") == 1);
+        fixture.RequireGroups({29});
+        const auto* kept = fixture.GroupList();
+        OBJ_cleanup_nid_postfix();
+        ERR_clear_error_nid_postfix();
+        Require(OBJ_create_nid_postfix("1.2.3.4", test[0], test[1]) >= 956);
+        bool correct = false;
+        const char* name = test[0] ? test[0] : test[1];
+        try { correct = SSL_CTX_set1_groups_list_nid_postfix(fixture.Context(), name) == 0; }
+        catch (const std::runtime_error& error) {
+            const std::string text = error.what();
+            const char* function = test[0] ? "OBJ_sn2nid" : "SSL_CTX_set1_groups_list";
+            correct = text.find(function) != std::string::npos && text.find("not implemented") != std::string::npos;
+        }
+        OBJ_cleanup_nid_postfix();
+        ERR_clear_error_nid_postfix();
+        if (!correct) std::fprintf(stderr, "registered group name %s is incorrectly accepted\n", name);
+        passed &= correct;
+        if (correct) {
+            Require(fixture.GroupList() == kept);
+            fixture.RequireGroups({29});
+        }
+    }
+    {
+        Fixture fixture;
+        OBJ_cleanup_nid_postfix();
+        ERR_clear_error_nid_postfix();
+        Require(OBJ_create_nid_postfix("1.2.3.4", nullptr, "prime256v1") >= 956);
+        const int result = SSL_CTX_set1_groups_list_nid_postfix(fixture.Context(), "prime256v1");
+        OBJ_cleanup_nid_postfix();
+        ERR_clear_error_nid_postfix();
+        Require(result == 1);
+        fixture.RequireGroups({23});
+    }
+    return passed;
+}
+
 int main() {
     InitializeHeap();
     TestAlpn();
     TestGroups();
     TestGroupsHostAllocationFailure();
     TestNullInternal();
+    const bool addedNames = TestAddedGroupNames();
     Require(liveAllocations == 0);
     std::puts("LibreSSL SSL_CTX ALPN and group list checks passed");
-    return 0;
+    return addedNames ? 0 : 1;
 }

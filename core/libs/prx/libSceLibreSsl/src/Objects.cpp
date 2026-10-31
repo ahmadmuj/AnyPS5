@@ -1,4 +1,4 @@
-#include "prx/libSceLibreSsl/include/Api.hpp"
+#include "prx/libSceLibreSsl/include/ObjectTable.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -1036,13 +1036,15 @@ constexpr std::array<std::uint16_t, 949> ShortNameOrder = {
 extern "C" {
 
 const char* APS5_VABI OBJ_nid2sn_nid_postfix(int nid) {
-    if (nid < 0 || static_cast<std::size_t>(nid) >= ShortNames.size()) return nullptr;
+    if (nid < 0) return nullptr;
+    if (static_cast<std::size_t>(nid) >= ShortNames.size()) NotImplemented_nid_no_patch(__func__);
     if (!ShortNames[nid]) throw std::runtime_error(std::string(__func__) + ": NID " + std::to_string(nid) + " is unassigned, and publishing OBJ_R_UNKNOWN_NID to the error queue is not implemented");
     return ShortNames[nid];
 }
 
 int APS5_VABI OBJ_sn2nid_nid_postfix(const char* name) {
     if (!name) APS5_INVALID_ARG_EX;
+    if (LibreSslHasAddedObjectName_nid_no_patch(name, false)) NotImplemented_nid_no_patch(__func__);
     std::size_t low = 0;
     std::size_t high = ShortNameOrder.size();
     while (low < high) {

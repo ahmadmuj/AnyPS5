@@ -1,5 +1,5 @@
 #include "prx/libc/include/Api.hpp"
-#include "prx/libSceLibreSsl/include/Api.hpp"
+#include "prx/libSceLibreSsl/include/ObjectTable.hpp"
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -78,7 +78,10 @@ int APS5_VABI SSL_CTX_set1_groups_list_nid_postfix(LibreSslCtx* ctx, const char*
             const std::size_t end = names.find(':', start);
             const std::string name(names.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start));
             int nid = OBJ_sn2nid_nid_postfix(name.c_str());
-            if (!nid) nid = NistCurveNid(name);
+            if (!nid) {
+                if (LibreSslHasAddedObjectName_nid_no_patch(name.c_str(), true)) NotImplemented_nid_no_patch(__func__);
+                nid = NistCurveNid(name);
+            }
             if (!nid) return 0;
             const std::uint16_t group = CurveId(nid);
             if (!group) return 0;
