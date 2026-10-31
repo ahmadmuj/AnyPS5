@@ -1,4 +1,5 @@
 #include "prx/libSceLibreSsl/include/Api.hpp"
+#include "prx/libSceLibreSsl/include/ObjectTable.hpp"
 #include <atomic>
 #include <bit>
 #include <climits>
@@ -272,6 +273,11 @@ bool ReadAlgorithm(Cursor& cursor, Algorithm& algorithm, const char* function) {
         algorithm.nullParameter = parameter.tagClass == 0 && parameter.tag == 5;
     }
     return !fields.length;
+}
+
+void RejectAddedObject(const Algorithm& algorithm, const char* function) {
+    const LibreSslAsn1Object object {nullptr, nullptr, 0, static_cast<int>(algorithm.objectLength), algorithm.object, 0};
+    if (LibreSslAddedObjectNid_nid_no_patch(&object)) NotImplemented_nid_no_patch((std::string(function) + ": an object registered by OBJ_create").c_str());
 }
 
 template<std::size_t Size> bool SameObject(const Algorithm& algorithm, const unsigned char (&object)[Size]) {
@@ -559,6 +565,7 @@ constexpr DigestObject DigestObjects[] {
 };
 
 bool SameDigestType(const Algorithm& algorithm, int type, const char* function) {
+    RejectAddedObject(algorithm, function);
     if (type < 0 || type >= ObjectTypeCount) return false;
     for (const auto& digest : DigestObjects) {
         const bool same = algorithm.objectLength == digest.length && !std::memcmp(algorithm.object, digest.object, static_cast<std::size_t>(digest.length));
@@ -1119,7 +1126,7 @@ int APS5_VABI RSA_sign_nid_postfix(int type, const unsigned char* digest, unsign
     if (type == DigestMd5Sha1) {
         if (digestLength != Md5Sha1Bytes) return 0;
     } else {
-        if (type <= 0 || type >= ObjectTypeCount) return 0;
+        if (type <= 0) return 0;
         object = &DigestObjectFor(type, __func__);
         if (digestLength > INT_MAX) NotImplemented_nid_no_patch((std::string(__func__) + ": a digest length over INT_MAX").c_str());
         algorithmLength = 2 + static_cast<std::uint64_t>(object->length) + 2;
@@ -1179,6 +1186,7 @@ LibreSslRsa* APS5_VABI d2i_RSA_PUBKEY_nid_postfix(LibreSslRsa** out, const unsig
     Algorithm algorithm;
     Element bits;
     if (!ReadAlgorithm(fields, algorithm, __func__) || !ReadPrimitive(fields, 3, bits, __func__) || bits.length < 1 || fields.length) return nullptr;
+    RejectAddedObject(algorithm, __func__);
     if (!SameObject(algorithm, RsaEncryptionObject) && !SameObject(algorithm, RsaObject)) return nullptr;
     const unsigned unused = bits.content[0];
     std::vector<unsigned char> key(bits.content + 1, bits.content + bits.length);
