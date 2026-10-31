@@ -274,6 +274,11 @@ bool ReadAlgorithm(Cursor& cursor, Algorithm& algorithm, const char* function) {
     return !fields.length;
 }
 
+void RejectAddedObject(const Algorithm& algorithm, const char* function) {
+    const LibreSslAsn1Object object {nullptr, nullptr, 0, static_cast<int>(algorithm.objectLength), algorithm.object, 0};
+    if (LibreSslAddedObjectNid_nid_no_patch(&object)) NotImplemented_nid_no_patch((std::string(function) + ": an object registered by OBJ_create").c_str());
+}
+
 template<std::size_t Size> bool SameObject(const Algorithm& algorithm, const unsigned char (&object)[Size]) {
     return algorithm.objectLength == static_cast<long>(Size) && !std::memcmp(algorithm.object, object, Size);
 }
@@ -559,8 +564,7 @@ constexpr DigestObject DigestObjects[] {
 };
 
 bool SameDigestType(const Algorithm& algorithm, int type, const char* function) {
-    const LibreSslAsn1Object object {nullptr, nullptr, 0, static_cast<int>(algorithm.objectLength), algorithm.object, 0};
-    if (LibreSslAddedObjectNid_nid_no_patch(&object)) NotImplemented_nid_no_patch((std::string(function) + ": a digest object registered by OBJ_create").c_str());
+    RejectAddedObject(algorithm, function);
     if (type < 0 || type >= ObjectTypeCount) return false;
     for (const auto& digest : DigestObjects) {
         const bool same = algorithm.objectLength == digest.length && !std::memcmp(algorithm.object, digest.object, static_cast<std::size_t>(digest.length));
@@ -1181,6 +1185,7 @@ LibreSslRsa* APS5_VABI d2i_RSA_PUBKEY_nid_postfix(LibreSslRsa** out, const unsig
     Algorithm algorithm;
     Element bits;
     if (!ReadAlgorithm(fields, algorithm, __func__) || !ReadPrimitive(fields, 3, bits, __func__) || bits.length < 1 || fields.length) return nullptr;
+    RejectAddedObject(algorithm, __func__);
     if (!SameObject(algorithm, RsaEncryptionObject) && !SameObject(algorithm, RsaObject)) return nullptr;
     const unsigned unused = bits.content[0];
     std::vector<unsigned char> key(bits.content + 1, bits.content + bits.length);
