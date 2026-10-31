@@ -1121,7 +1121,7 @@ int APS5_VABI RSA_sign_nid_postfix(int type, const unsigned char* digest, unsign
     if (type == DigestMd5Sha1) {
         if (digestLength != Md5Sha1Bytes) return 0;
     } else {
-        if (type <= 0 || type >= ObjectTypeCount) return 0;
+        if (type <= 0) return 0;
         object = &DigestObjectFor(type, __func__);
         if (digestLength > INT_MAX) NotImplemented_nid_no_patch((std::string(__func__) + ": a digest length over INT_MAX").c_str());
         algorithmLength = 2 + static_cast<std::uint64_t>(object->length) + 2;

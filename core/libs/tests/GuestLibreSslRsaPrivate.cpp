@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <source_location>
 #include <stdexcept>
 #include <utility>
@@ -241,12 +242,43 @@ static void TestSign() {
     Require(Sign(key, DigestMd5Sha1, Pattern(36, 30), signature, length) == 1 && length == 64 && Written(signature, Hex(Md5Sha1Signature)));
     Require(Sign(key, DigestSha256, Pattern(34, 31), signature, length) == 1 && length == 64 && Written(signature, Hex(Sha256Longest)));
     Require(Sign(key, DigestSha256, {}, signature, length) == 1 && length == 64 && Written(signature, Hex(Sha256Empty)));
-    const std::pair<int, Bytes> refused[] {{DigestMd5Sha1, Pattern(35, 30)}, {DigestMd5Sha1, {}}, {0, Pattern(32, 30)}, {-1, Pattern(32, 30)}, {956, Pattern(32, 30)},
+    const std::pair<int, Bytes> refused[] {{DigestMd5Sha1, Pattern(35, 30)}, {DigestMd5Sha1, {}}, {0, Pattern(32, 30)}, {-1, Pattern(32, 30)},
         {DigestSha512, Pattern(64, 30)}, {DigestSha256, Pattern(35, 31)}};
     for (const auto& [type, digest] : refused) Require(Sign(key, type, digest, signature, length) == 0 && length == UntouchedLength && Written(signature, {}));
     RequireThrows([&] { Sign(key, DigestRsaEncryption, Pattern(32, 30), signature, length); });
     const auto digest = Pattern(32, 30);
     RequireThrows([&] { RSA_sign_nid_postfix(DigestSha256, digest.data(), 0x80000000u, signature.data(), &length, key.rsa); });
+}
+
+static void TestSignAddedObject() {
+    OBJ_cleanup_nid_postfix();
+    ERR_clear_error_nid_postfix();
+    const int nid = OBJ_create_nid_postfix("1.2.3.4", "testDigest", "Test Digest");
+    Require(nid >= 956);
+    TestKey key(AllFields);
+    const auto digest = Pattern(32, 30);
+    Bytes signature;
+    unsigned length = 0;
+    bool accepted = false;
+    try {
+        const int result = Sign(key, nid, digest, signature, length);
+        if (result == 1) {
+            Require(length == KeyBytes);
+            auto expected = Hex("302b300706032a030405000420");
+            expected.insert(expected.end(), digest.begin(), digest.end());
+            Bytes recovered(KeyBytes + 8, 0xEE);
+            Require(RSA_public_decrypt_nid_postfix(static_cast<int>(length), signature.data(), recovered.data(), key.rsa, PaddingPkcs1) == static_cast<int>(expected.size()));
+            accepted = Written(recovered, expected);
+        } else {
+            std::fprintf(stderr, "added digest RSA_sign: expected valid signature or not implemented, got %d\n", result);
+        }
+    } catch (const std::runtime_error& error) {
+        Require(std::strstr(error.what(), "RSA_sign") && std::strstr(error.what(), "not implemented"));
+        accepted = true;
+    }
+    OBJ_cleanup_nid_postfix();
+    ERR_clear_error_nid_postfix();
+    Require(accepted);
 }
 
 struct Crypts {
@@ -328,6 +360,7 @@ int main() {
     TestKeyShapes();
     TestPrivateDecrypt();
     TestSign();
+    TestSignAddedObject();
     TestDispatch();
     std::puts("libSceLibreSsl RSA private tests passed");
 }
