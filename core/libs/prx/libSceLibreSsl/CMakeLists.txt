@@ -160,7 +160,6 @@ if(BUILD_TESTING)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libSceLibreSsl>")
     endif()
 
-
     add_test_executable(guest_libressl_ec_keys_tests ${LIBS_INCLUDE_DIR}/tests/GuestLibreSslEcKeys.cpp)
     target_include_directories(guest_libressl_ec_keys_tests PRIVATE ${LIBS_INCLUDE_DIR})
     target_link_libraries(guest_libressl_ec_keys_tests PRIVATE libSceLibreSsl libc)
@@ -171,8 +170,6 @@ if(BUILD_TESTING)
         set_tests_properties(guest_libressl_ec_keys PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libSceLibreSsl>")
     endif()
-
-
 
     add_test_executable(guest_libressl_ec_private_key_tests ${LIBS_INCLUDE_DIR}/tests/GuestLibreSslEcPrivateKey.cpp)
     target_include_directories(guest_libressl_ec_private_key_tests PRIVATE ${LIBS_INCLUDE_DIR})
