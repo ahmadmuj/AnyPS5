@@ -1,4 +1,5 @@
 #include "prx/libSceLibreSsl/include/Api.hpp"
+#include "prx/libSceLibreSsl/include/ObjectTable.hpp"
 #include <atomic>
 #include <bit>
 #include <climits>
@@ -558,6 +559,8 @@ constexpr DigestObject DigestObjects[] {
 };
 
 bool SameDigestType(const Algorithm& algorithm, int type, const char* function) {
+    const LibreSslAsn1Object object {nullptr, nullptr, 0, static_cast<int>(algorithm.objectLength), algorithm.object, 0};
+    if (LibreSslAddedObjectNid_nid_no_patch(&object)) NotImplemented_nid_no_patch((std::string(function) + ": a digest object registered by OBJ_create").c_str());
     if (type < 0 || type >= ObjectTypeCount) return false;
     for (const auto& digest : DigestObjects) {
         const bool same = algorithm.objectLength == digest.length && !std::memcmp(algorithm.object, digest.object, static_cast<std::size_t>(digest.length));
