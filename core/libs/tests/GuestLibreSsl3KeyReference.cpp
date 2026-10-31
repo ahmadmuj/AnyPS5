@@ -169,23 +169,47 @@ static void CheckEcLifetime(bool named) {
     Require(releaseCount == 2 && live.empty(), "final EC free did not release both private key allocations exactly once");
 }
 
-static void CheckEcRetain() {
-    EcKey key;
-    for (std::int32_t initial : {-2, 0, 1, 37, std::numeric_limits<std::int32_t>::max() - 1}) {
-        key.references = initial;
-        Require(EC_KEY_up_ref_nid_postfix(&key) == (initial > 0), "EC retain return value");
-        Require(key.references == initial + 1, "EC retain count");
-        Require(!key.group && !key.publicKey && !key.privateKey, "EC retain changed key state");
+static void CheckEcConcurrentFinalRelease() {
+    Require(live.empty(), "guest allocations remain before concurrent final release");
+    allocationCount = 0;
+    releaseCount = 0;
+    EcKey* key = EC_KEY_new_by_curve_name_nid_postfix(415);
+    Require(key && EC_KEY_generate_key_nid_postfix(key) == 1, "generate EC key for concurrent final release");
+    Require(EC_KEY_up_ref_nid_postfix(key) == 1 && key->references == 2, "two references before concurrent final release");
+    Require(allocationCount == 2 && live.size() == 2 && releaseCount == 0, "private key allocations before concurrent final release");
+    std::atomic<bool> start = false;
+    std::array<std::thread, 2> threads;
+    for (auto& thread : threads) {
+        thread = std::thread([&] {
+            while (!start.load())
+                std::this_thread::yield();
+            EC_KEY_free_nid_postfix(key);
+        });
     }
-    key.references = std::numeric_limits<std::int32_t>::max();
+    start = true;
+    for (auto& thread : threads)
+        thread.join();
+    Require(releaseCount == 2 && live.empty(), "concurrent final EC release did not free each private key allocation once");
+}
+
+static void CheckEcRetain() {
+    EcKey* key = EC_KEY_new_nid_postfix();
+    Require(key != nullptr, "new EC retain test key");
+    for (std::int32_t initial : {-2, 0, 1, 37, std::numeric_limits<std::int32_t>::max() - 1}) {
+        key->references = initial;
+        Require(EC_KEY_up_ref_nid_postfix(key) == (initial > 0), "EC retain return value");
+        Require(key->references == initial + 1, "EC retain count");
+        Require(!key->group && !key->publicKey && !key->privateKey, "EC retain changed key state");
+    }
+    key->references = std::numeric_limits<std::int32_t>::max();
     bool overflowThrown = false;
     try {
-        EC_KEY_up_ref_nid_postfix(&key);
+        EC_KEY_up_ref_nid_postfix(key);
     } catch (const std::overflow_error&) {
         overflowThrown = true;
     }
-    Require(overflowThrown && key.references == std::numeric_limits<std::int32_t>::max(), "EC overflow retain must throw without mutation");
-    Require(!key.group && !key.publicKey && !key.privateKey, "EC overflow retain changed key state");
+    Require(overflowThrown && key->references == std::numeric_limits<std::int32_t>::max(), "EC overflow retain must throw without mutation");
+    Require(!key->group && !key->publicKey && !key->privateKey, "EC overflow retain changed key state");
     bool nullThrown = false;
     try {
         EC_KEY_up_ref_nid_postfix(nullptr);
@@ -193,10 +217,13 @@ static void CheckEcRetain() {
         nullThrown = true;
     }
     Require(nullThrown, "EC retain of null did not throw");
+    key->references = 1;
+    EC_KEY_free_nid_postfix(key);
     EC_KEY_free_nid_postfix(nullptr);
     InitializeHeap();
     CheckEcLifetime(false);
     CheckEcLifetime(true);
+    CheckEcConcurrentFinalRelease();
 }
 
 int main(int argc, char** argv) {
